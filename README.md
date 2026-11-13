@@ -3,8 +3,10 @@
 # Dfunc-Audit
 This is a tool that can be used by developers to check if exploitation using LD_PRELOAD is still possible given the current disable_functions in the php.ini file and taking into consideration the PHP modules installed on the server.
 
+Fork of [teambi0s/dfunc-bypasser](https://github.com/teambi0s/dfunc-bypasser).
+
 ## Installation
-`git clone https://github.com/teambi0s/dfunc-bypasser`
+`git clone https://github.com/keshrisaksham/DFunc-Audit`
 
 ## Versions
 This repo has three equivalent implementations:
