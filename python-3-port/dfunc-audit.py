@@ -2,16 +2,47 @@
 import argparse
 import requests
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--url", help="PHPinfo URL: eg. https://example.com/phpinfo.php")
-parser.add_argument("--file", help="PHPinfo localfile path: eg. dir/phpinfo")
-parser.add_argument("--gen-checker", metavar="OUTPUT_FILE", dest="gen_checker",
-                     help="Write a small PHP diagnostic script to OUTPUT_FILE. Place it on a "
-                          "server and run it there to see, per function, whether it is "
-                          "ENABLED or DISABLED on that server.")
-parser.add_argument("--functions",
-                     help="Comma separated list of function names for --gen-checker to test "
-                          "(default: the built-in dangerous functions list)")
+parser = argparse.ArgumentParser(
+    prog="dfunc-audit.py",
+    formatter_class=argparse.RawDescriptionHelpFormatter,
+    description=(
+        "Checks whether disable_functions in a phpinfo() dump still leaves room for\n"
+        "LD_PRELOAD-based exploitation, given the PHP modules installed on the server."
+    ),
+    epilog=(
+        "examples:\n"
+        "  Audit a live phpinfo page:\n"
+        "    dfunc-audit.py --url https://example.com/phpinfo.php\n\n"
+        "  Audit a phpinfo dump you saved locally:\n"
+        "    dfunc-audit.py --file dir/phpinfo\n\n"
+        "  Generate a standalone checker script to run directly on the server:\n"
+        "    dfunc-audit.py --gen-checker check.php\n\n"
+        "  ...testing your own functions as well as the built-in list:\n"
+        "    dfunc-audit.py --gen-checker check.php --functions mymodule_func --include-defaults\n"
+    ),
+)
+
+source = parser.add_argument_group("where to read the phpinfo from")
+source.add_argument("--url", metavar="URL",
+                     help="PHPinfo URL, e.g. https://example.com/phpinfo.php")
+source.add_argument("--file", metavar="PATH",
+                     help="Local phpinfo file, e.g. dir/phpinfo")
+
+checker = parser.add_argument_group("generate a standalone checker script instead")
+checker.add_argument("--gen-checker", metavar="OUTPUT_FILE", dest="gen_checker",
+                      help="Write a self-contained PHP script to OUTPUT_FILE. Run it "
+                           "directly on a server to see, per function, whether it is "
+                           "actually ENABLED or DISABLED right now, rather than guessing "
+                           "from a phpinfo dump.")
+checker.add_argument("--functions", metavar="LIST",
+                      help="Comma-separated function names to test instead of the "
+                           "built-in dangerous-functions list.")
+checker.add_argument("--include-defaults", action="store_true", dest="include_defaults",
+                      help="Test the built-in dangerous-functions list as well as "
+                           "--functions, instead of replacing it.")
+checker.add_argument("--enabled-only", action="store_true", dest="enabled_only",
+                      help="Only print functions that come back ENABLED; hide the "
+                           "disabled/unavailable ones.")
 
 args = parser.parse_args()
 
@@ -73,38 +104,48 @@ CHECKER_PHP_HEADER = """<?php
 $functions = array(
 """
 
-CHECKER_PHP_FOOTER = """);
+CHECKER_PHP_FOOTER_TEMPLATE = """);
+
+$enabled_only = {enabled_only};
 
 $disabled_ini = ini_get('disable_functions');
 $disabled_list = array_map('trim', explode(',', $disabled_ini));
 
-foreach ($functions as $f) {
-    if (function_exists($f)) {
+foreach ($functions as $f) {{
+    if (function_exists($f)) {{
         $status = 'ENABLED';
-    } elseif (in_array($f, $disabled_list, true)) {
+    }} elseif (in_array($f, $disabled_list, true)) {{
         $status = 'DISABLED (listed in disable_functions)';
-    } else {
+    }} else {{
         $status = 'DISABLED / NOT AVAILABLE';
-    }
+    }}
+    if ($enabled_only && $status !== 'ENABLED') {{
+        continue;
+    }}
     printf("%-30s %s\\n", $f, $status);
-}
+}}
 """
 
-def generate_checker_script(functions, output_path):
+def generate_checker_script(functions, output_path, enabled_only=False):
     body = ""
     for f in functions:
         body += "    '" + f.replace("'", "\\'") + "',\n"
+    footer = CHECKER_PHP_FOOTER_TEMPLATE.format(enabled_only='true' if enabled_only else 'false')
     with open(output_path, 'w') as fh:
-        fh.write(CHECKER_PHP_HEADER + body + CHECKER_PHP_FOOTER)
+        fh.write(CHECKER_PHP_HEADER + body + footer)
     print("\nWrote " + str(len(functions)) + " function checks to " + output_path)
     print("Run it on the server with: php " + output_path)
 
 if args.gen_checker:
     if args.functions:
         check_list = [f.strip() for f in args.functions.split(',') if f.strip()]
+        if args.include_defaults:
+            for f in dangerous_functions + module_extra_functions:
+                if f not in check_list:
+                    check_list.append(f)
     else:
         check_list = dangerous_functions + module_extra_functions
-    generate_checker_script(check_list, args.gen_checker)
+    generate_checker_script(check_list, args.gen_checker, args.enabled_only)
     exit()
 
 if args.url:

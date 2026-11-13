@@ -1,8 +1,8 @@
 #!/usr/bin/env php
 <?php
 
-$known_long_opts = ["url", "file", "help", "gen-checker", "functions"];
-$longopts = ["url:", "file:", "help", "gen-checker:", "functions:"];
+$known_long_opts = ["url", "file", "help", "gen-checker", "functions", "include-defaults", "enabled-only"];
+$longopts = ["url:", "file:", "help", "gen-checker:", "functions:", "include-defaults", "enabled-only"];
 $options = getopt("h", $longopts);
 
 // getopt() silently drops unrecognized long options instead of erroring,
@@ -19,16 +19,35 @@ foreach ($argv as $arg) {
 }
 
 function print_help() {
-    echo "Usage: php dfunc-audit.php [--url URL] [--file FILE] [--gen-checker OUTPUT_FILE] [--functions LIST]\n\n";
-    echo "  --url URL             PHPinfo URL: eg. https://example.com/phpinfo.php\n";
-    echo "  --file FILE           PHPinfo localfile path: eg. dir/phpinfo\n";
+    echo "Usage: php dfunc-audit.php [--url URL] [--file PATH] [--gen-checker OUTPUT_FILE]\n";
+    echo "                           [--functions LIST] [--include-defaults] [--enabled-only]\n\n";
+    echo "Checks whether disable_functions in a phpinfo() dump still leaves room for\n";
+    echo "LD_PRELOAD-based exploitation, given the PHP modules installed on the server.\n\n";
+    echo "where to read the phpinfo from:\n";
+    echo "  --url URL             PHPinfo URL, e.g. https://example.com/phpinfo.php\n";
+    echo "  --file PATH           Local phpinfo file, e.g. dir/phpinfo\n\n";
+    echo "generate a standalone checker script instead:\n";
     echo "  --gen-checker OUTPUT_FILE\n";
-    echo "                        Write a small PHP diagnostic script to OUTPUT_FILE. Place it\n";
-    echo "                        on a server and run it there to see, per function, whether it\n";
-    echo "                        is ENABLED or DISABLED on that server.\n";
-    echo "  --functions LIST      Comma separated list of function names for --gen-checker to\n";
-    echo "                        test (default: the built-in dangerous functions list)\n";
-    echo "  -h, --help            show this help message and exit\n";
+    echo "                        Write a self-contained PHP script to OUTPUT_FILE. Run it\n";
+    echo "                        directly on a server to see, per function, whether it is\n";
+    echo "                        actually ENABLED or DISABLED right now, rather than\n";
+    echo "                        guessing from a phpinfo dump.\n";
+    echo "  --functions LIST      Comma-separated function names to test instead of the\n";
+    echo "                        built-in dangerous-functions list.\n";
+    echo "  --include-defaults    Test the built-in dangerous-functions list as well as\n";
+    echo "                        --functions, instead of replacing it.\n";
+    echo "  --enabled-only        Only print functions that come back ENABLED; hide the\n";
+    echo "                        disabled/unavailable ones.\n\n";
+    echo "  -h, --help            show this help message and exit\n\n";
+    echo "examples:\n";
+    echo "  Audit a live phpinfo page:\n";
+    echo "    php dfunc-audit.php --url https://example.com/phpinfo.php\n\n";
+    echo "  Audit a phpinfo dump you saved locally:\n";
+    echo "    php dfunc-audit.php --file dir/phpinfo\n\n";
+    echo "  Generate a standalone checker script to run directly on the server:\n";
+    echo "    php dfunc-audit.php --gen-checker check.php\n\n";
+    echo "  ...testing your own functions as well as the built-in list:\n";
+    echo "    php dfunc-audit.php --gen-checker check.php --functions mymodule_func --include-defaults\n";
 }
 
 if (isset($options['h']) || isset($options['help'])) {
@@ -97,7 +116,7 @@ $dangerous_functions = ['pcntl_alarm','pcntl_fork','pcntl_waitpid','pcntl_wait',
 // harmless to list checks for modules that may not even be installed.
 $module_extra_functions = ['mb_send_mail', 'imap_open', 'imap_mail', 'libvirt_connect', 'gnupg_init'];
 
-function generate_checker_script($functions, $output_path) {
+function generate_checker_script($functions, $output_path, $enabled_only = false) {
     $body = "";
     foreach ($functions as $f) {
         $body .= "    '" . str_replace("'", "\\'", $f) . "',\n";
@@ -107,6 +126,7 @@ function generate_checker_script($functions, $output_path) {
     $script .= "// Run it on a server (CLI or over HTTP) to list, for each function name\n";
     $script .= "// below, whether it is ENABLED or DISABLED on that server right now.\n\n";
     $script .= "\$functions = array(\n" . $body . ");\n\n";
+    $script .= "\$enabled_only = " . ($enabled_only ? "true" : "false") . ";\n\n";
     $script .= "\$disabled_ini = ini_get('disable_functions');\n";
     $script .= "\$disabled_list = array_map('trim', explode(',', \$disabled_ini));\n\n";
     $script .= "foreach (\$functions as \$f) {\n";
@@ -116,6 +136,9 @@ function generate_checker_script($functions, $output_path) {
     $script .= "        \$status = 'DISABLED (listed in disable_functions)';\n";
     $script .= "    } else {\n";
     $script .= "        \$status = 'DISABLED / NOT AVAILABLE';\n";
+    $script .= "    }\n";
+    $script .= "    if (\$enabled_only && \$status !== 'ENABLED') {\n";
+    $script .= "        continue;\n";
     $script .= "    }\n";
     $script .= "    printf(\"%-30s %s\\n\", \$f, \$status);\n";
     $script .= "}\n";
@@ -127,10 +150,17 @@ function generate_checker_script($functions, $output_path) {
 if (isset($options['gen-checker'])) {
     if (isset($options['functions'])) {
         $check_list = array_filter(array_map('trim', explode(',', $options['functions'])));
+        if (isset($options['include-defaults'])) {
+            foreach (array_merge($dangerous_functions, $module_extra_functions) as $f) {
+                if (!in_array($f, $check_list, true)) {
+                    $check_list[] = $f;
+                }
+            }
+        }
     } else {
         $check_list = array_merge($dangerous_functions, $module_extra_functions);
     }
-    generate_checker_script($check_list, $options['gen-checker']);
+    generate_checker_script($check_list, $options['gen-checker'], isset($options['enabled-only']));
     exit();
 }
 
