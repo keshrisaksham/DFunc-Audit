@@ -81,7 +81,7 @@ generates a standalone PHP script that runs one specific command through one of 
 enabled functions, so you can confirm command execution genuinely works rather than just
 that the function is callable. Only use this against servers you're authorized to test.
 
-Supported functions: `system`, `exec`, `shell_exec`, `passthru`, `popen`, `proc_open`.
+Supported functions: `system`, `exec`, `shell_exec`, `passthru`, `popen`, `proc_open`, `pcntl_exec`.
 Every function gets the same default test case if you omit `--command`: it runs `id` so
 you get an immediate, harmless confirmation that execution works before trying anything
 riskier.
